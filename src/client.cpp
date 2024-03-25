@@ -9,6 +9,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h> // 包含 inet_pton 函数
 
+#include <mutex>
+
 
 struct MyStruct {
 	uint32_t custom_mode; /*<  A bitfield for use for autopilot-specific flags*/
@@ -20,11 +22,77 @@ struct MyStruct {
 };
 
 
+struct Quater{
+    float w;
+    float x;
+    float y;
+    float z;
+
+};
+
+struct GPSInformation{
+    int32_t lat;//degE7
+    int32_t lon;//degE7
+    int32_t alt;//mm
+    int32_t relative_alt;//
+
+};
+
+
+struct GPSAndQua{
+    int32_t lat;//degE7
+    int32_t lon;//degE7
+    int32_t alt;//mm
+    int32_t relative_alt;//
+  
+    float roll;
+    float pitch;
+    float yaw;
+
+};
+
+
+struct EulerAngles {
+    double roll, pitch, yaw;
+};
+
+Quater qua;
+EulerAngles euler;
+GPSInformation gpsinfo;
+
+std::mutex mtx_qua;
+std::mutex mtx_gps;
+
+
 mavlink_status_t status;
 mavlink_message_t msg_mav;
 int chan = MAVLINK_COMM_0;
 
 struct sockaddr_in client_addr;
+
+EulerAngles ToEulerAngles(Quater q) {
+    EulerAngles angles;
+ 
+    // roll (x-axis rotation)
+    double sinr_cosp = 2 * (q.w * q.x + q.y * q.z);
+    double cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y);
+    angles.roll = std::atan2(sinr_cosp, cosr_cosp);
+ 
+    // pitch (y-axis rotation)
+    double sinp = 2 * (q.w * q.y - q.z * q.x);
+    if (std::abs(sinp) >= 1)
+        angles.pitch = std::copysign(M_PI / 2, sinp); // use 90 degrees if out of range
+    else
+        angles.pitch = std::asin(sinp);
+ 
+    // yaw (z-axis rotation)
+    double siny_cosp = 2 * (q.w * q.z + q.x * q.y);
+    double cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
+    angles.yaw = std::atan2(siny_cosp, cosy_cosp);
+
+    return angles;
+}
+
 
 int initClient() {
 
@@ -128,6 +196,16 @@ void SerialThread(serial::Serial& ser) {
 						global_position_int.vx, global_position_int.vy, global_position_int.vz, global_position_int.hdg
 						);
 
+					
+					{
+						std::lock_guard<std::mutex> lock(mtx_gps);
+						gpsinfo.alt = global_position_int.alt;
+						gpsinfo.lat = global_position_int.lat;
+						gpsinfo.lon = global_position_int.lon;
+						gpsinfo.relative_alt = global_position_int.relative_alt;
+						
+					}
+
 				}
 				break;
 
@@ -140,7 +218,22 @@ void SerialThread(serial::Serial& ser) {
 					float y = quater[2];
 					float z = quater[3];
 
+				
 					printf("w = %f, x = %f, y = %f, z = %f\n", w, x, y, z);
+					{
+						std::lock_guard<std::mutex> lock(mtx_qua);
+						qua.w = w;
+						qua.x = x;
+						qua.y = y;
+						qua.z = z;
+						
+						euler = ToEulerAngles(qua);
+						
+								
+					}
+
+
+					
 				}
 				break;
 
